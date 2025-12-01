@@ -381,55 +381,60 @@ void fullStop()
 
 void moveBase()
 {
-    const float DEADZONE_VEL = 0.01;  // m/s หรือ rad/s สำหรับ twist
-    const float DEADZONE_RPM = 1.0;   // rpm สำหรับ PID
-
-    // Deadband twist
-    float cmd_linear_x = (fabs(twist_msg.linear.x) < DEADZONE_VEL) ? 0.0 : twist_msg.linear.x;
-    float cmd_linear_y = (fabs(twist_msg.linear.y) < DEADZONE_VEL) ? 0.0 : twist_msg.linear.y;
-    float cmd_angular = (fabs(twist_msg.angular.z) < DEADZONE_VEL) ? 0.0 : twist_msg.angular.z;
-
-    // brake if there's no command received, or first command
-    if(((millis() - prev_cmd_time) >= 200) ||
-       (cmd_linear_x == 0.0 && cmd_linear_y == 0.0 && cmd_angular == 0.0))
+    // brake if there's no command received, or when it's only the first command sent
+    if(((millis() - prev_cmd_time) >= 200)) 
     {
-        fullStop();
+        twist_msg.linear.x = 0.0;
+        twist_msg.linear.y = 0.0;
+        twist_msg.angular.z = 0.0;
+
         digitalWrite(LED_PIN, HIGH);
-        return;
     }
+    
+    // get the required rpm for each motor based on required velocities, and base used
+    Kinematics::rpm req_rpm = kinematics.getRPM(
+        twist_msg.linear.x, 
+        twist_msg.linear.y, 
+        twist_msg.angular.z
+    );
 
-    // get the required rpm for each motor
-    Kinematics::rpm req_rpm = kinematics.getRPM(cmd_linear_x, cmd_linear_y, cmd_angular);
-
-    // get current rpm
+    // get the current speed of each motor
     float current_rpm1 = motor1_encoder.getRPM();
     float current_rpm2 = motor2_encoder.getRPM();
     float current_rpm3 = motor3_encoder.getRPM();
     float current_rpm4 = motor4_encoder.getRPM();
 
-    // apply deadband to RPM
-    if(fabs(req_rpm.motor1) < DEADZONE_RPM) req_rpm.motor1 = 0;
-    if(fabs(req_rpm.motor2) < DEADZONE_RPM) req_rpm.motor2 = 0;
-    if(fabs(req_rpm.motor3) < DEADZONE_RPM) req_rpm.motor3 = 0;
-    if(fabs(req_rpm.motor4) < DEADZONE_RPM) req_rpm.motor4 = 0;
+    if(twist_msg.linear.x == 0.0 && twist_msg.angular.z == 0.0){
+        fullStop();
 
-    // control motors using PID
-    motor1_controller.spin(motor1_pid.compute(req_rpm.motor1, current_rpm1));
-    motor2_controller.spin(motor2_pid.compute(req_rpm.motor2, current_rpm2));
-    motor3_controller.spin(motor3_pid.compute(req_rpm.motor3, current_rpm3));
-    motor4_controller.spin(motor4_pid.compute(req_rpm.motor4, current_rpm4));
+    }else{
 
-    // update odometry
+        // the required rpm is capped at -/+ MAX_RPM to prevent the PID from having too much error
+        // the PWM value sent to the motor driver is the calculated PID based on required RPM vs measured RPM
+        motor1_controller.spin(motor1_pid.compute(req_rpm.motor1, current_rpm1));
+        motor2_controller.spin(motor2_pid.compute(req_rpm.motor2, current_rpm2));
+        motor3_controller.spin(motor3_pid.compute(req_rpm.motor3, current_rpm3));
+        motor4_controller.spin(motor4_pid.compute(req_rpm.motor4, current_rpm4));
+    }
+
     Kinematics::velocities current_vel = kinematics.getVelocities(
-        current_rpm1, current_rpm2, current_rpm3, current_rpm4
+        current_rpm1, 
+        current_rpm2, 
+        current_rpm3, 
+        current_rpm4
     );
 
     unsigned long now = millis();
     float vel_dt = (now - prev_odom_update) / 1000.0;
     prev_odom_update = now;
-
-    odometry.update(current_vel.linear_x, current_vel.linear_y, current_vel.angular_z, vel_dt);
+    odometry.update(
+        vel_dt, 
+        current_vel.linear_x, 
+        current_vel.linear_y, 
+        current_vel.angular_z
+    );
 }
+
 
 void publishData()
 {
